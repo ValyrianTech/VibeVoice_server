@@ -1,0 +1,460 @@
+import os
+import time
+import torch
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from typing import Optional
+import torchaudio
+import soundfile as sf
+from pydub import AudioSegment, silence
+import re
+import sys
+import logging
+import io
+import magic
+
+logging.basicConfig(level=logging.INFO)
+
+app = FastAPI()
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+device = "cuda:0" if torch.cuda.is_available() else "cpu"
+
+# Model paths - configurable via environment variables
+MODEL_PATH = os.environ.get("VIBEVOICE_MODEL_PATH", "/workspace/models/vibevoice/VibeVoice-Large")
+TOKENIZER_PATH = os.environ.get("VIBEVOICE_TOKENIZER_PATH", "/workspace/models/vibevoice/tokenizer")
+
+# Import VibeVoice - will be available after installing vibevoice package
+from transformers import AutoTokenizer, AutoModel
+import numpy as np
+
+# Global model variables - will be loaded lazily or at startup
+tokenizer = None
+processor = None
+model = None
+model_loaded = False
+
+def load_models():
+    """Load models - can be called at startup or lazily on first request."""
+    global tokenizer, processor, model, model_loaded
+    
+    if model_loaded:
+        return True
+    
+    logging.info(f"Loading VibeVoice model from {MODEL_PATH}")
+    logging.info(f"Loading tokenizer from {TOKENIZER_PATH}")
+    
+    try:
+        from vibevoice import VibeVoiceForConditionalGeneration, VibeVoiceProcessor
+        
+        # Check if paths are local directories
+        tokenizer_is_local = os.path.isdir(TOKENIZER_PATH)
+        model_is_local = os.path.isdir(MODEL_PATH)
+        
+        # Load tokenizer - use local_files_only if path is a local directory
+        tokenizer = AutoTokenizer.from_pretrained(
+            TOKENIZER_PATH, 
+            trust_remote_code=True,
+            local_files_only=tokenizer_is_local
+        )
+        
+        # Load VibeVoice model
+        processor = VibeVoiceProcessor.from_pretrained(
+            MODEL_PATH, 
+            tokenizer=tokenizer,
+            local_files_only=model_is_local
+        )
+        model = VibeVoiceForConditionalGeneration.from_pretrained(
+            MODEL_PATH,
+            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+            device_map=device,
+            trust_remote_code=True,
+            local_files_only=model_is_local
+        )
+        model.eval()
+        model_loaded = True
+        logging.info(f"VibeVoice model loaded on {device}")
+        return True
+    except Exception as e:
+        logging.error(f"Failed to load models: {e}")
+        return False
+
+# Try to load models at startup, but don't fail if they're not available
+LAZY_LOAD = os.environ.get("LAZY_LOAD_MODELS", "false").lower() == "true"
+if not LAZY_LOAD:
+    try:
+        load_models()
+    except Exception as e:
+        logging.warning(f"Models not loaded at startup: {e}. Will try lazy loading on first request.")
+
+output_dir = 'outputs'
+os.makedirs(output_dir, exist_ok=True)
+
+resources_dir = 'resources'
+os.makedirs(resources_dir, exist_ok=True)
+
+# Default voice settings
+DEFAULT_VOICE = "default_en"
+SAMPLE_RATE = 24000
+
+# Copy default voice files if they exist in the model directory
+voices_dir = os.path.join(os.path.dirname(MODEL_PATH), "voices")
+if os.path.exists(voices_dir):
+    import shutil
+    for voice_file in os.listdir(voices_dir):
+        if voice_file.endswith('.wav'):
+            src = os.path.join(voices_dir, voice_file)
+            dst = os.path.join(resources_dir, voice_file)
+            if not os.path.exists(dst):
+                shutil.copy2(src, dst)
+                logging.info(f"Copied default voice: {voice_file}")
+
+
+def convert_to_wav(input_path, output_path):
+    """Convert any audio format to WAV using pydub."""
+    audio = AudioSegment.from_file(input_path)
+    audio = audio.set_channels(1)  # Convert to mono
+    audio = audio.set_frame_rate(SAMPLE_RATE)  # Set to expected sample rate
+    audio.export(output_path, format='wav')
+
+
+def detect_leading_silence(audio, silence_threshold=-42, chunk_size=10):
+    """Detect silence at the beginning of the audio."""
+    trim_ms = 0
+    while audio[trim_ms:trim_ms + chunk_size].dBFS < silence_threshold and trim_ms < len(audio):
+        trim_ms += chunk_size
+    return trim_ms
+
+
+def remove_silence_edges(audio, silence_threshold=-42):
+    """Remove silence from the beginning and end of the audio."""
+    start_trim = detect_leading_silence(audio, silence_threshold)
+    end_trim = detect_leading_silence(audio.reverse(), silence_threshold)
+    duration = len(audio)
+    return audio[start_trim:duration - end_trim]
+
+
+def process_reference_audio(reference_file: str) -> str:
+    """Process reference audio: clip to ~15 seconds, remove silence edges."""
+    temp_short_ref = f'{output_dir}/temp_short_ref.wav'
+    aseg = AudioSegment.from_file(reference_file)
+
+    # 1. try to find long silence for clipping
+    non_silent_segs = silence.split_on_silence(
+        aseg, min_silence_len=1000, silence_thresh=-50, keep_silence=1000, seek_step=10
+    )
+    non_silent_wave = AudioSegment.silent(duration=0)
+    for non_silent_seg in non_silent_segs:
+        if len(non_silent_wave) > 6000 and len(non_silent_wave + non_silent_seg) > 15000:
+            logging.info("Audio is over 15s, clipping short. (1)")
+            break
+        non_silent_wave += non_silent_seg
+
+    # 2. try to find short silence for clipping if 1. failed
+    if len(non_silent_wave) > 15000:
+        non_silent_segs = silence.split_on_silence(
+            aseg, min_silence_len=100, silence_thresh=-40, keep_silence=1000, seek_step=10
+        )
+        non_silent_wave = AudioSegment.silent(duration=0)
+        for non_silent_seg in non_silent_segs:
+            if len(non_silent_wave) > 6000 and len(non_silent_wave + non_silent_seg) > 15000:
+                logging.info("Audio is over 15s, clipping short. (2)")
+                break
+            non_silent_wave += non_silent_seg
+
+    aseg = non_silent_wave
+
+    # 3. if no proper silence found for clipping
+    if len(aseg) > 15000:
+        aseg = aseg[:15000]
+        logging.info("Audio is over 15s, clipping short. (3)")
+
+    aseg = remove_silence_edges(aseg) + AudioSegment.silent(duration=50)
+    aseg.export(temp_short_ref, format='wav')
+    
+    return temp_short_ref
+
+
+def load_audio_for_cloning(audio_path: str) -> torch.Tensor:
+    """Load and preprocess audio for voice cloning."""
+    waveform, sr = torchaudio.load(audio_path)
+    
+    # Resample if needed
+    if sr != SAMPLE_RATE:
+        resampler = torchaudio.transforms.Resample(sr, SAMPLE_RATE)
+        waveform = resampler(waveform)
+    
+    # Convert to mono if stereo
+    if waveform.shape[0] > 1:
+        waveform = waveform.mean(dim=0, keepdim=True)
+    
+    return waveform
+
+
+def generate_speech(
+    text: str,
+    voice_audio_path: Optional[str] = None,
+    speed: float = 1.0,
+    diffusion_steps: int = 20,
+    cfg_scale: float = 1.3,
+    seed: int = 42,
+) -> str:
+    """Generate speech using VibeVoice model."""
+    
+    # Set seed for reproducibility
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+    
+    # Map speed to voice_speed_factor (clamp to 0.8-1.2 range)
+    voice_speed_factor = max(0.8, min(1.2, speed))
+    if speed != voice_speed_factor:
+        logging.warning(f"Speed {speed} clamped to {voice_speed_factor} (valid range: 0.8-1.2)")
+    
+    # Prepare inputs
+    if voice_audio_path and os.path.exists(voice_audio_path):
+        # Load voice for cloning
+        voice_waveform = load_audio_for_cloning(voice_audio_path)
+        
+        # Process with voice cloning
+        inputs = processor(
+            text=text,
+            audio=voice_waveform,
+            sampling_rate=SAMPLE_RATE,
+            return_tensors="pt",
+        )
+    else:
+        # No voice cloning - use model's default voice
+        inputs = processor(
+            text=text,
+            return_tensors="pt",
+        )
+    
+    # Move inputs to device
+    inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+    
+    # Generate speech
+    with torch.no_grad():
+        output = model.generate(
+            **inputs,
+            diffusion_steps=diffusion_steps,
+            cfg_scale=cfg_scale,
+            use_sampling=False,  # Deterministic mode
+        )
+    
+    # Get audio output
+    audio_output = output.audio.cpu().numpy().squeeze()
+    
+    # Apply speed adjustment if needed (post-processing)
+    if voice_speed_factor != 1.0:
+        # Use pydub for speed adjustment
+        temp_path = f'{output_dir}/temp_speed.wav'
+        sf.write(temp_path, audio_output, SAMPLE_RATE)
+        audio_seg = AudioSegment.from_wav(temp_path)
+        # Speed up/slow down by changing frame rate then converting back
+        adjusted = audio_seg._spawn(audio_seg.raw_data, overrides={
+            "frame_rate": int(audio_seg.frame_rate * voice_speed_factor)
+        }).set_frame_rate(SAMPLE_RATE)
+        save_path = f'{output_dir}/output_synthesized.wav'
+        adjusted.export(save_path, format='wav')
+    else:
+        save_path = f'{output_dir}/output_synthesized.wav'
+        sf.write(save_path, audio_output, SAMPLE_RATE)
+    
+    return save_path
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Warmup inference on startup."""
+    try:
+        test_text = "This is a test sentence generated by the VibeVoice API."
+        voice = "demo_speaker0"
+        await synthesize_speech(test_text, voice)
+        logging.info("Startup warmup complete")
+    except Exception as e:
+        logging.warning(f"Startup warmup failed (this may be normal if no demo voice exists): {e}")
+
+
+@app.get("/base_tts/")
+async def base_tts(text: str, speed: Optional[float] = 1.0):
+    """
+    Perform text-to-speech conversion using only the base speaker.
+    """
+    try:
+        return await synthesize_speech(text=text, voice=DEFAULT_VOICE, speed=speed)
+    except Exception as e:
+        logging.error(f"Error in base_tts: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/change_voice/")
+async def change_voice(reference_speaker: str = Form(...), file: UploadFile = File(...)):
+    """
+    Change the voice of an existing audio file.
+    """
+    try:
+        logging.info(f'changing voice to {reference_speaker}...')
+
+        contents = await file.read()
+        
+        # Save the input audio temporarily
+        input_path = f'{output_dir}/input_audio.wav'
+        with open(input_path, 'wb') as f:
+            f.write(contents)
+
+        # Find the reference audio file
+        matching_files = [f for f in os.listdir("resources") if f.startswith(str(reference_speaker))]
+        if not matching_files:
+            raise HTTPException(status_code=400, detail="No matching reference speaker found.")
+        
+        reference_file = f'resources/{matching_files[0]}'
+        
+        # Convert reference file to WAV if it's not already
+        if not reference_file.lower().endswith('.wav'):
+            ref_wav_path = f'{output_dir}/ref_converted.wav'
+            convert_to_wav(reference_file, ref_wav_path)
+            reference_file = ref_wav_path
+        
+        # For voice conversion, we need to transcribe the input audio first
+        # Use Whisper for transcription
+        try:
+            import whisper
+            whisper_model = whisper.load_model("base")
+            result = whisper_model.transcribe(input_path)
+            text = result["text"]
+            logging.info(f"Transcribed text: {text}")
+        except ImportError:
+            # Fallback: if whisper not available, raise error
+            raise HTTPException(
+                status_code=500, 
+                detail="Whisper not installed. Voice conversion requires ASR. Install with: pip install openai-whisper"
+            )
+        
+        # Process reference audio
+        processed_ref = process_reference_audio(reference_file)
+        
+        # Generate speech with the new voice
+        save_path = generate_speech(
+            text=text,
+            voice_audio_path=processed_ref,
+            speed=1.0,
+        )
+
+        result = StreamingResponse(open(save_path, 'rb'), media_type="audio/wav")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/upload_audio/")
+async def upload_audio(audio_file_label: str = Form(...), file: UploadFile = File(...)):
+    """
+    Upload an audio file for later use as the reference audio.
+    """
+    try:
+        contents = await file.read()
+
+        allowed_extensions = {'wav', 'mp3', 'flac', 'ogg'}
+        max_file_size = 5 * 1024 * 1024  # 5MB
+
+        if not file.filename.split('.')[-1] in allowed_extensions:
+            return {"error": "Invalid file type. Allowed types are: wav, mp3, flac, ogg"}
+
+        if len(contents) > max_file_size:
+            return {"error": "File size is over limit. Max size is 5MB."}
+
+        temp_file = io.BytesIO(contents)
+        file_format = magic.from_buffer(temp_file.read(), mime=True)
+
+        if 'audio' not in file_format:
+            return {"error": "Invalid file content."}
+
+        file_extension = file.filename.split('.')[-1]
+        stored_file_name = f"{audio_file_label}.{file_extension}"
+
+        with open(f"resources/{stored_file_name}", "wb") as f:
+            f.write(contents)
+
+        # Also create a WAV version for VibeVoice
+        wav_path = f"resources/{audio_file_label}.wav"
+        convert_to_wav(f"resources/{stored_file_name}", wav_path)
+
+        return {"message": f"File {file.filename} uploaded successfully with label {audio_file_label}."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/synthesize_speech/")
+async def synthesize_speech(
+        text: str,
+        voice: str,
+        speed: Optional[float] = 1.0,
+):
+    """
+    Synthesize speech from text using a specified voice and style.
+    """
+    start_time = time.time()
+    try:
+        logging.info(f'Generating speech for {voice}')
+
+        # First try to find a WAV version
+        matching_files = [f for f in os.listdir("resources") if f.startswith(voice) and f.lower().endswith('.wav')]
+        
+        # If no WAV found, try other formats and convert
+        if not matching_files:
+            matching_files = [f for f in os.listdir("resources") if f.startswith(voice)]
+            if not matching_files:
+                # No voice file found - use default/no voice cloning
+                logging.warning(f"No matching voice found for '{voice}', using default voice")
+                reference_file = None
+            else:
+                # Convert to WAV
+                input_file = f'resources/{matching_files[0]}'
+                wav_path = f'{output_dir}/ref_converted.wav'
+                convert_to_wav(input_file, wav_path)
+                reference_file = wav_path
+        else:
+            reference_file = f'resources/{matching_files[0]}'
+
+        # Process reference audio if we have one
+        if reference_file:
+            processed_ref = process_reference_audio(reference_file)
+        else:
+            processed_ref = None
+        
+        # Generate speech
+        save_path = generate_speech(
+            text=text,
+            voice_audio_path=processed_ref,
+            speed=speed,
+        )
+
+        result = StreamingResponse(open(save_path, 'rb'), media_type="audio/wav")
+
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+
+        result.headers["X-Elapsed-Time"] = str(elapsed_time)
+        result.headers["X-Device-Used"] = device
+
+        # Add CORS headers
+        result.headers["Access-Control-Allow-Origin"] = "*"
+        result.headers["Access-Control-Allow-Credentials"] = "true"
+        result.headers["Access-Control-Allow-Headers"] = "Origin, Content-Type, X-Amz-Date, Authorization, X-Api-Key, X-Amz-Security-Token, locale"
+        result.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

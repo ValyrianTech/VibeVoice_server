@@ -1,0 +1,131 @@
+# VibeVoice Server
+
+A FastAPI-based TTS server using Microsoft's VibeVoice model. This server is designed as a **drop-in replacement** for the F5-TTS server, providing the same API endpoints.
+
+## Features
+
+- Text-to-speech synthesis with voice cloning
+- Same API as F5-TTS server for easy migration
+- Support for multiple voice presets
+- Voice conversion (change voice of existing audio)
+- Docker support
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/base_tts/` | TTS with default voice |
+| `GET` | `/synthesize_speech/` | TTS with custom voice |
+| `POST` | `/upload_audio/` | Upload reference audio for voice cloning |
+| `POST` | `/change_voice/` | Voice conversion on existing audio |
+
+### Endpoint Details
+
+#### GET /base_tts/
+```
+GET /base_tts/?text=Hello%20world&speed=1.0
+```
+- `text` (required): Text to synthesize
+- `speed` (optional, default=1.0): Speech speed (0.8-1.2)
+
+#### GET /synthesize_speech/
+```
+GET /synthesize_speech/?text=Hello%20world&voice=my_voice&speed=1.0
+```
+- `text` (required): Text to synthesize
+- `voice` (required): Voice label (must match uploaded audio)
+- `speed` (optional, default=1.0): Speech speed (0.8-1.2)
+
+#### POST /upload_audio/
+Upload a reference audio file for voice cloning.
+- `audio_file_label` (form): Label for the voice
+- `file` (file): Audio file (wav, mp3, flac, ogg, max 5MB)
+
+#### POST /change_voice/
+Convert the voice of an existing audio file.
+- `reference_speaker` (form): Voice label to use
+- `file` (file): Audio file to convert
+
+## Installation
+
+### Option 1: Docker (Recommended)
+
+1. Build the Docker image:
+```bash
+docker build -t vibevoice-server .
+```
+
+2. Download models (inside container or mount volume):
+```bash
+./install_models.sh
+```
+
+3. Run the container:
+```bash
+docker run -p 7860:7860 \
+  -v /path/to/models:/workspace/models/vibevoice \
+  --gpus all \
+  vibevoice-server
+```
+
+### Option 2: Local Installation
+
+1. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+2. Clone and install VibeVoice:
+```bash
+git clone https://github.com/vibevoice-community/VibeVoice.git
+cd VibeVoice
+pip install -e .
+```
+
+3. Download models:
+```bash
+./install_models.sh
+```
+
+4. Set environment variables:
+```bash
+export VIBEVOICE_MODEL_PATH=/path/to/VibeVoice-Large
+export VIBEVOICE_TOKENIZER_PATH=/path/to/tokenizer
+```
+
+5. Run the server:
+```bash
+./start.sh
+```
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VIBEVOICE_MODEL_PATH` | `/workspace/models/vibevoice/VibeVoice-Large` | Path to VibeVoice model |
+| `VIBEVOICE_TOKENIZER_PATH` | `/workspace/models/vibevoice/tokenizer` | Path to Qwen tokenizer |
+
+## Model Requirements
+
+- **VibeVoice-Large**: ~18.7GB, requires ~20GB VRAM
+- **Tokenizer**: Qwen2.5-1.5B tokenizer
+
+For lower VRAM, consider using quantized models:
+- `VibeVoice-Large-Q8`: ~12GB VRAM
+- `VibeVoice-Large-Q4`: ~8GB VRAM
+
+## Voice Cloning Tips
+
+- Use clear audio with minimal background noise
+- Recommended: 10-30 seconds of speech
+- Audio is automatically resampled to 24kHz
+
+## Differences from F5-TTS
+
+1. **Speed parameter**: Clamped to 0.8-1.2 range (F5-TTS allows arbitrary values)
+2. **Voice cloning**: Uses audio prefill instead of text-based reference
+3. **Voice conversion**: Requires Whisper for transcription (installed by default)
+
+## License
+
+MIT License (same as VibeVoice)
