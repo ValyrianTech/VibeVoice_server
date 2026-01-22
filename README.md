@@ -64,7 +64,7 @@ Models are automatically downloaded on first start. To persist models across con
 #### Building from source (optional)
 
 ```bash
-docker build -t vibevoice-server .
+docker build -t vibevoice_server .
 ```
 
 ### Option 2: Local Installation
