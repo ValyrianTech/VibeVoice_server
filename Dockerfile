@@ -87,10 +87,13 @@ RUN mkdir -p /app/VibeVoice/server/outputs \
 RUN rm -f /app/VibeVoice/server/server.py /app/VibeVoice/server/start.sh 2>/dev/null || true
 COPY server.py /app/VibeVoice/server/
 COPY start.sh /app/VibeVoice/server/
+COPY install_models.sh /app/VibeVoice/server/
 
 # Fix line endings (in case of Windows CRLF) and make executable
 RUN sed -i 's/\r$//' /app/VibeVoice/server/start.sh \
+    && sed -i 's/\r$//' /app/VibeVoice/server/install_models.sh \
     && chmod +x /app/VibeVoice/server/start.sh \
+    && chmod +x /app/VibeVoice/server/install_models.sh \
     && cat /app/VibeVoice/server/start.sh
 
 # Set environment variables for model paths (models can be on network volume)
