@@ -18,7 +18,9 @@ mkdir -p "$BASE_DIR"
 cd "$BASE_DIR"
 
 echo "Installing VibeVoice-Large model..."
-if [ ! -d "VibeVoice-Large" ]; then
+# Check for actual model files, not just directory existence
+if [ ! -f "VibeVoice-Large/config.json" ]; then
+    rm -rf VibeVoice-Large
     git clone https://huggingface.co/aoi-ot/VibeVoice-Large VibeVoice-Large
 else
     echo "VibeVoice-Large already exists, skipping..."
