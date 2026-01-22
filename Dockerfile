@@ -91,6 +91,7 @@ RUN rm -f /app/VibeVoice/server/server.py /app/VibeVoice/server/start.sh 2>/dev/
 COPY server.py /app/VibeVoice/server/
 COPY start.sh /app/VibeVoice/server/
 COPY install_models.sh /app/VibeVoice/server/
+COPY demo_speaker0.mp3 /app/VibeVoice/server/resources/
 
 # Fix line endings (in case of Windows CRLF) and make executable
 RUN sed -i 's/\r$//' /app/VibeVoice/server/start.sh \
