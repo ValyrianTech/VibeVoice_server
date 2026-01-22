@@ -6,15 +6,16 @@
 # On RunPod: Models are stored in /workspace which is the network volume,
 # so they persist across container restarts.
 
-MODEL_DIR="${VIBEVOICE_MODEL_PATH:-/workspace/models/vibevoice}"
+# Base directory for all models (not the model path itself)
+BASE_DIR="/workspace/models/vibevoice"
 
 echo "=========================================="
-echo "Installing VibeVoice models to $MODEL_DIR"
+echo "Installing VibeVoice models to $BASE_DIR"
 echo "(This location persists on RunPod network volumes)"
 echo "=========================================="
 
-mkdir -p "$MODEL_DIR"
-cd "$MODEL_DIR"
+mkdir -p "$BASE_DIR"
+cd "$BASE_DIR"
 
 echo "Installing VibeVoice-Large model..."
 if [ ! -d "VibeVoice-Large" ]; then
@@ -24,15 +25,16 @@ else
 fi
 
 echo "Installing Qwen tokenizer..."
-mkdir -p tokenizer
-cd tokenizer
-if [ ! -f "tokenizer.json" ]; then
-    git clone https://huggingface.co/Qwen/Qwen2.5-1.5B .
+if [ ! -d "tokenizer" ] || [ ! -f "tokenizer/tokenizer.json" ]; then
+    rm -rf tokenizer
+    git clone https://huggingface.co/Qwen/Qwen2.5-1.5B tokenizer
 else
     echo "Tokenizer already exists, skipping..."
 fi
 
-echo "Model installation complete!"
 echo ""
-echo "Model path: $MODEL_DIR/VibeVoice-Large"
-echo "Tokenizer path: $MODEL_DIR/tokenizer"
+echo "=========================================="
+echo "Model installation complete!"
+echo "=========================================="
+echo "Model path: $BASE_DIR/VibeVoice-Large"
+echo "Tokenizer path: $BASE_DIR/tokenizer"

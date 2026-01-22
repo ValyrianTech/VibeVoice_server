@@ -65,8 +65,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsox-fmt-all \
     libsndfile1 \
     libmagic1 \
+    git \
+    git-lfs \
     && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    && apt-get clean \
+    && git lfs install
 
 # Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv
