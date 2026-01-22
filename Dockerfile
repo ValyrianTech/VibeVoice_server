@@ -82,13 +82,15 @@ RUN mkdir -p /workspace/VibeVoice/server/outputs \
     /workspace/VibeVoice/server/resources \
     /workspace/models/vibevoice
 
-# Copy the server files
+# Remove any existing server files from the cloned repo and copy our own
+RUN rm -f /workspace/VibeVoice/server/server.py /workspace/VibeVoice/server/start.sh 2>/dev/null || true
 COPY server.py /workspace/VibeVoice/server/
 COPY start.sh /workspace/VibeVoice/server/
 
 # Fix line endings (in case of Windows CRLF) and make executable
 RUN sed -i 's/\r$//' /workspace/VibeVoice/server/start.sh \
-    && chmod +x /workspace/VibeVoice/server/start.sh
+    && chmod +x /workspace/VibeVoice/server/start.sh \
+    && cat /workspace/VibeVoice/server/start.sh
 
 # Set environment variables for model paths
 ENV VIBEVOICE_MODEL_PATH=/workspace/models/vibevoice/VibeVoice-Large
