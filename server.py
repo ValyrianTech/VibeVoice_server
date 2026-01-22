@@ -54,7 +54,8 @@ def load_models():
     logging.info(f"Loading tokenizer from {TOKENIZER_PATH}")
     
     try:
-        from vibevoice import VibeVoiceForConditionalGeneration, VibeVoiceProcessor
+        from vibevoice.modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
+        from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
         
         # Check if paths are local directories
         tokenizer_is_local = os.path.isdir(TOKENIZER_PATH)
@@ -67,18 +68,13 @@ def load_models():
             local_files_only=tokenizer_is_local
         )
         
-        # Load VibeVoice model
-        processor = VibeVoiceProcessor.from_pretrained(
-            MODEL_PATH, 
-            tokenizer=tokenizer,
-            local_files_only=model_is_local
-        )
-        model = VibeVoiceForConditionalGeneration.from_pretrained(
+        # Load VibeVoice processor and model
+        processor = VibeVoiceProcessor.from_pretrained(MODEL_PATH)
+        model = VibeVoiceForConditionalGenerationInference.from_pretrained(
             MODEL_PATH,
             torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-            device_map=device,
-            trust_remote_code=True,
-            local_files_only=model_is_local
+            device_map='auto',
+            attn_implementation='sdpa'
         )
         model.eval()
         model_loaded = True
@@ -220,55 +216,64 @@ def generate_speech(
     if speed != voice_speed_factor:
         logging.warning(f"Speed {speed} clamped to {voice_speed_factor} (valid range: 0.8-1.2)")
     
-    # Prepare inputs
+    # Format text with speaker label for VibeVoice
+    formatted_text = f"Speaker 1: {text}"
+    
+    # Prepare inputs using VibeVoice processor
     if voice_audio_path and os.path.exists(voice_audio_path):
-        # Load voice for cloning
-        voice_waveform = load_audio_for_cloning(voice_audio_path)
-        
-        # Process with voice cloning
+        # Use voice cloning with the provided audio file
         inputs = processor(
-            text=text,
-            audio=voice_waveform,
-            sampling_rate=SAMPLE_RATE,
+            text=[formatted_text],
+            voice_samples=[[voice_audio_path]],
+            padding=True,
             return_tensors="pt",
+            return_attention_mask=True,
         )
     else:
-        # No voice cloning - use model's default voice
+        # No voice cloning - generate without voice samples
         inputs = processor(
-            text=text,
+            text=[formatted_text],
+            voice_samples=[[]],
+            padding=True,
             return_tensors="pt",
+            return_attention_mask=True,
         )
     
     # Move inputs to device
-    inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+    inputs = inputs.to(device)
+    
+    # Set diffusion steps
+    model.set_ddpm_inference_steps(num_steps=diffusion_steps)
     
     # Generate speech
     with torch.no_grad():
-        output = model.generate(
+        outputs = model.generate(
             **inputs,
-            diffusion_steps=diffusion_steps,
+            max_new_tokens=None,
             cfg_scale=cfg_scale,
-            use_sampling=False,  # Deterministic mode
+            tokenizer=processor.tokenizer,
+            generation_config={'do_sample': False},
+            verbose=False,
         )
     
-    # Get audio output
-    audio_output = output.audio.cpu().numpy().squeeze()
+    # Get audio output from speech_outputs
+    if outputs.speech_outputs and outputs.speech_outputs[0] is not None:
+        audio_output = outputs.speech_outputs[0]
+    else:
+        raise ValueError("No audio output generated")
+    
+    # Save audio using processor
+    save_path = f'{output_dir}/output_synthesized.wav'
+    processor.save_audio(audio_output, output_path=save_path)
     
     # Apply speed adjustment if needed (post-processing)
     if voice_speed_factor != 1.0:
-        # Use pydub for speed adjustment
-        temp_path = f'{output_dir}/temp_speed.wav'
-        sf.write(temp_path, audio_output, SAMPLE_RATE)
-        audio_seg = AudioSegment.from_wav(temp_path)
+        audio_seg = AudioSegment.from_wav(save_path)
         # Speed up/slow down by changing frame rate then converting back
         adjusted = audio_seg._spawn(audio_seg.raw_data, overrides={
             "frame_rate": int(audio_seg.frame_rate * voice_speed_factor)
         }).set_frame_rate(SAMPLE_RATE)
-        save_path = f'{output_dir}/output_synthesized.wav'
         adjusted.export(save_path, format='wav')
-    else:
-        save_path = f'{output_dir}/output_synthesized.wav'
-        sf.write(save_path, audio_output, SAMPLE_RATE)
     
     return save_path
 
