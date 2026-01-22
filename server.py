@@ -217,7 +217,10 @@ def generate_speech(
         logging.warning(f"Speed {speed} clamped to {voice_speed_factor} (valid range: 0.8-1.2)")
     
     # Format text with speaker label for VibeVoice
-    formatted_text = f"Speaker 1: {text}"
+    # Replace newlines with spaces to keep all text in a single speaker turn
+    # The processor expects "Speaker X: text" format, one turn per line
+    clean_text = text.replace('\n', ' ').replace('\r', ' ').strip()
+    formatted_text = f"Speaker 1: {clean_text}"
     
     # Prepare inputs using VibeVoice processor
     if voice_audio_path and os.path.exists(voice_audio_path):
