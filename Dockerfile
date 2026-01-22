@@ -23,8 +23,8 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Upgrade pip
 RUN pip install --no-cache-dir --upgrade pip wheel setuptools
 
-# Install PyTorch (CPU for building, runtime will use CUDA)
-RUN pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu124
+# Install PyTorch with CUDA 12.8 (required for RTX 5090/Blackwell sm_120)
+RUN pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu128
 
 # Clone and install VibeVoice
 WORKDIR /build
