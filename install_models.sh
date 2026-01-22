@@ -2,10 +2,16 @@
 
 # Script to install VibeVoice models
 # Run this before starting the server or mount the models directory
+#
+# On RunPod: Models are stored in /workspace which is the network volume,
+# so they persist across container restarts.
 
 MODEL_DIR="${VIBEVOICE_MODEL_PATH:-/workspace/models/vibevoice}"
 
+echo "=========================================="
 echo "Installing VibeVoice models to $MODEL_DIR"
+echo "(This location persists on RunPod network volumes)"
+echo "=========================================="
 
 mkdir -p "$MODEL_DIR"
 cd "$MODEL_DIR"
