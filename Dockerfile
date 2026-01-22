@@ -85,7 +85,10 @@ RUN mkdir -p /workspace/VibeVoice/server/outputs \
 # Copy the server files
 COPY server.py /workspace/VibeVoice/server/
 COPY start.sh /workspace/VibeVoice/server/
-RUN chmod +x /workspace/VibeVoice/server/start.sh
+
+# Fix line endings (in case of Windows CRLF) and make executable
+RUN sed -i 's/\r$//' /workspace/VibeVoice/server/start.sh \
+    && chmod +x /workspace/VibeVoice/server/start.sh
 
 # Set environment variables for model paths
 ENV VIBEVOICE_MODEL_PATH=/workspace/models/vibevoice/VibeVoice-Large
@@ -98,4 +101,4 @@ WORKDIR /workspace/VibeVoice/server
 EXPOSE 7860
 
 # Set the entrypoint to our start script
-ENTRYPOINT ["./start.sh"]
+ENTRYPOINT ["/bin/bash", "/workspace/VibeVoice/server/start.sh"]

@@ -9,8 +9,8 @@ export PYTHONPATH="$PYTHONPATH:$(pwd)"
 # Add VibeVoice to PYTHONPATH
 export PYTHONPATH="$PYTHONPATH:/workspace/VibeVoice"
 
-# Start the FastAPI server with uvicorn
-python -m uvicorn server:app --host 0.0.0.0 --port 7860
+# Start the FastAPI server with uvicorn in the background
+python -m uvicorn server:app --host 0.0.0.0 --port 7860 &
 
-# Note: The --reload flag can be added during development for auto-reloading
-# python -m uvicorn server:app --host 0.0.0.0 --port 7860 --reload
+# Keep container running for RunPod web terminal access
+sleep infinity
