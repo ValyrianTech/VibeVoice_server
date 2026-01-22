@@ -1,14 +1,15 @@
 # VibeVoice Server
 
-A FastAPI-based TTS server using Microsoft's VibeVoice model. This server is designed as a **drop-in replacement** for the F5-TTS server, providing the same API endpoints.
+A FastAPI-based TTS server using Microsoft's VibeVoice model for high-quality text-to-speech synthesis with voice cloning capabilities.
 
 ## Features
 
-- Text-to-speech synthesis with voice cloning
-- Same API as F5-TTS server for easy migration
+- High-quality text-to-speech synthesis
+- Voice cloning from reference audio
 - Support for multiple voice presets
 - Voice conversion (change voice of existing audio)
-- Docker support
+- Docker support with RunPod compatibility
+- RTX 5090 (Blackwell) GPU support
 
 ## API Endpoints
 
@@ -120,11 +121,11 @@ For lower VRAM, consider using quantized models:
 - Recommended: 10-30 seconds of speech
 - Audio is automatically resampled to 24kHz
 
-## Differences from F5-TTS
+## Notes
 
-1. **Speed parameter**: Clamped to 0.8-1.2 range (F5-TTS allows arbitrary values)
-2. **Voice cloning**: Uses audio prefill instead of text-based reference
-3. **Voice conversion**: Requires Whisper for transcription (installed by default)
+- **Speed parameter**: Clamped to 0.8-1.2 range
+- **Voice cloning**: Uses audio prefill for natural voice reproduction
+- **Voice conversion**: Uses Whisper for transcription (installed by default)
 
 ## License
 
