@@ -51,22 +51,20 @@ Convert the voice of an existing audio file.
 
 ### Option 1: Docker (Recommended)
 
-1. Build the Docker image:
-```bash
-docker build -t vibevoice-server .
-```
-
-2. Download models (inside container or mount volume):
-```bash
-./install_models.sh
-```
-
-3. Run the container:
+Run the pre-built image:
 ```bash
 docker run -p 7860:7860 \
   -v /path/to/models:/workspace/models/vibevoice \
   --gpus all \
-  vibevoice-server
+  valyriantech/vibevoice_server:latest
+```
+
+Models are automatically downloaded on first start. To persist models across container restarts, mount a volume to `/workspace/models/vibevoice`.
+
+#### Building from source (optional)
+
+```bash
+docker build -t vibevoice-server .
 ```
 
 ### Option 2: Local Installation
