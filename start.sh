@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 export PYTHONPATH="$PYTHONPATH:$(pwd)"
 
 # Add VibeVoice to PYTHONPATH
-export PYTHONPATH="$PYTHONPATH:/workspace/VibeVoice"
+export PYTHONPATH="$PYTHONPATH:/app/VibeVoice"
 
 # Start the FastAPI server with uvicorn in the background
 python -m uvicorn server:app --host 0.0.0.0 --port 7860 &

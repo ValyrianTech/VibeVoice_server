@@ -72,35 +72,36 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy VibeVoice installation
-COPY --from=builder /build/VibeVoice /workspace/VibeVoice
+# Copy VibeVoice installation to /app (not /workspace which RunPod overwrites)
+COPY --from=builder /build/VibeVoice /app/VibeVoice
 
 ENV SHELL=/bin/bash
 
 # Create necessary directories
-RUN mkdir -p /workspace/VibeVoice/server/outputs \
-    /workspace/VibeVoice/server/resources \
+# Server files go in /app, models can be in /workspace for RunPod network volume
+RUN mkdir -p /app/VibeVoice/server/outputs \
+    /app/VibeVoice/server/resources \
     /workspace/models/vibevoice
 
 # Remove any existing server files from the cloned repo and copy our own
-RUN rm -f /workspace/VibeVoice/server/server.py /workspace/VibeVoice/server/start.sh 2>/dev/null || true
-COPY server.py /workspace/VibeVoice/server/
-COPY start.sh /workspace/VibeVoice/server/
+RUN rm -f /app/VibeVoice/server/server.py /app/VibeVoice/server/start.sh 2>/dev/null || true
+COPY server.py /app/VibeVoice/server/
+COPY start.sh /app/VibeVoice/server/
 
 # Fix line endings (in case of Windows CRLF) and make executable
-RUN sed -i 's/\r$//' /workspace/VibeVoice/server/start.sh \
-    && chmod +x /workspace/VibeVoice/server/start.sh \
-    && cat /workspace/VibeVoice/server/start.sh
+RUN sed -i 's/\r$//' /app/VibeVoice/server/start.sh \
+    && chmod +x /app/VibeVoice/server/start.sh \
+    && cat /app/VibeVoice/server/start.sh
 
-# Set environment variables for model paths
+# Set environment variables for model paths (models can be on network volume)
 ENV VIBEVOICE_MODEL_PATH=/workspace/models/vibevoice/VibeVoice-Large
 ENV VIBEVOICE_TOKENIZER_PATH=/workspace/models/vibevoice/tokenizer
 
 # Set the working directory to the server directory
-WORKDIR /workspace/VibeVoice/server
+WORKDIR /app/VibeVoice/server
 
 # Expose port
 EXPOSE 7860
 
 # Set the entrypoint to our start script
-ENTRYPOINT ["/bin/bash", "/workspace/VibeVoice/server/start.sh"]
+ENTRYPOINT ["/bin/bash", "/app/VibeVoice/server/start.sh"]
