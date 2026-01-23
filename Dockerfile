@@ -44,8 +44,8 @@ RUN pip install --no-cache-dir \
     transformers \
     huggingface_hub
 
-# Install flash-attention (optional, may fail)
-RUN pip install --no-cache-dir flash-attn --no-build-isolation || true
+# Install flash-attention from pre-built wheel (PyTorch 2.10 + CUDA 12.8 + Python 3.10)
+RUN pip install --no-cache-dir https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.12/flash_attn-2.6.3+cu128torch2.10-cp310-cp310-linux_x86_64.whl || true
 
 # =============================================================================
 # Stage 2: Runtime - Minimal image with only runtime dependencies
