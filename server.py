@@ -249,6 +249,7 @@ def generate_speech(
     model.set_ddpm_inference_steps(num_steps=diffusion_steps)
     
     # Generate speech
+    start_time = time.time()
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
@@ -258,6 +259,7 @@ def generate_speech(
             generation_config={'do_sample': False},
             verbose=False,
         )
+    generation_time = time.time() - start_time
     
     # Get audio output from speech_outputs
     if outputs.speech_outputs and outputs.speech_outputs[0] is not None:
@@ -268,6 +270,11 @@ def generate_speech(
     # Save audio using processor
     save_path = f'{output_dir}/output_synthesized.wav'
     processor.save_audio(audio_output, output_path=save_path)
+    
+    # Calculate audio duration and log generation stats
+    audio_samples = audio_output.shape[-1] if len(audio_output.shape) > 0 else len(audio_output)
+    audio_duration = audio_samples / SAMPLE_RATE
+    logging.info(f"Generation completed in {generation_time:.2f}s (audio duration: {audio_duration:.2f}s, RTF: {generation_time/audio_duration:.2f}x)")
     
     # Apply speed adjustment if needed (post-processing)
     if voice_speed_factor != 1.0:
