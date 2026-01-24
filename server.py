@@ -43,6 +43,11 @@ processor = None
 model = None
 model_loaded = False
 
+# Voice embedding cache - stores processed voice data for repeated use
+# Key: voice label, Value: dict with processed audio data and file mtime
+voice_cache = {}
+VOICE_CACHE_MAX_SIZE = 50  # Maximum number of voices to cache
+
 def load_models():
     """Load models - can be called at startup or lazily on first request."""
     global tokenizer, processor, model, model_loaded
@@ -139,6 +144,14 @@ def remove_silence_edges(audio, silence_threshold=-42):
     return audio[start_trim:duration - end_trim]
 
 
+def get_file_mtime(filepath: str) -> float:
+    """Get file modification time for cache invalidation."""
+    try:
+        return os.path.getmtime(filepath)
+    except OSError:
+        return 0.0
+
+
 def process_reference_audio(reference_file: str) -> str:
     """Process reference audio: clip to ~15 seconds, remove silence edges."""
     temp_short_ref = f'{output_dir}/temp_short_ref.wav'
@@ -199,6 +212,7 @@ def load_audio_for_cloning(audio_path: str) -> torch.Tensor:
 def generate_speech(
     text: str,
     voice_audio_path: Optional[str] = None,
+    voice_label: Optional[str] = None,
     speed: float = 1.0,
     diffusion_steps: int = 20,
     cfg_scale: float = 1.3,
@@ -224,14 +238,87 @@ def generate_speech(
     
     # Prepare inputs using VibeVoice processor
     if voice_audio_path and os.path.exists(voice_audio_path):
-        # Use voice cloning with the provided audio file
-        inputs = processor(
-            text=[formatted_text],
-            voice_samples=[[voice_audio_path]],
-            padding=True,
-            return_tensors="pt",
-            return_attention_mask=True,
-        )
+        # Check if we can use cached voice embeddings
+        if voice_label and voice_label in voice_cache:
+            cached = voice_cache[voice_label]
+            file_mtime = get_file_mtime(voice_audio_path)
+            
+            if cached.get('mtime') == file_mtime and cached.get('path') == voice_audio_path:
+                # Cache hit - use cached voice data
+                logging.info(f"Using cached voice embedding for '{voice_label}'")
+                cached_voice = cached['voice_inputs']
+                
+                # Process with voice to get correct input_ids structure
+                # but we'll replace the speech tensors with cached versions
+                inputs = processor(
+                    text=[formatted_text],
+                    voice_samples=[[voice_audio_path]],
+                    padding=True,
+                    return_tensors="pt",
+                    return_attention_mask=True,
+                )
+                
+                # Replace speech tensors with cached versions
+                if cached_voice['speech_tensors'] is not None:
+                    inputs['speech_tensors'] = cached_voice['speech_tensors'].clone()
+                    inputs['speech_masks'] = cached_voice['speech_masks'].clone()
+            else:
+                # Cache miss or stale - process and cache
+                logging.info(f"Processing and caching voice embedding for '{voice_label}'")
+                inputs = processor(
+                    text=[formatted_text],
+                    voice_samples=[[voice_audio_path]],
+                    padding=True,
+                    return_tensors="pt",
+                    return_attention_mask=True,
+                )
+                
+                # Cache the voice data
+                cached_voice_data = {
+                    'speech_tensors': inputs.get('speech_tensors').clone() if inputs.get('speech_tensors') is not None else None,
+                    'speech_masks': inputs.get('speech_masks').clone() if inputs.get('speech_masks') is not None else None,
+                }
+                
+                # Manage cache size
+                if len(voice_cache) >= VOICE_CACHE_MAX_SIZE:
+                    oldest_key = next(iter(voice_cache))
+                    del voice_cache[oldest_key]
+                    logging.info(f"Voice cache full, removed oldest entry: '{oldest_key}'")
+                
+                voice_cache[voice_label] = {
+                    'voice_inputs': cached_voice_data,
+                    'mtime': file_mtime,
+                    'path': voice_audio_path,
+                }
+        else:
+            # No voice label or not in cache - process and optionally cache
+            inputs = processor(
+                text=[formatted_text],
+                voice_samples=[[voice_audio_path]],
+                padding=True,
+                return_tensors="pt",
+                return_attention_mask=True,
+            )
+            
+            # Cache if we have a voice label
+            if voice_label:
+                logging.info(f"Processing and caching voice embedding for '{voice_label}'")
+                file_mtime = get_file_mtime(voice_audio_path)
+                cached_voice_data = {
+                    'speech_tensors': inputs.get('speech_tensors').clone() if inputs.get('speech_tensors') is not None else None,
+                    'speech_masks': inputs.get('speech_masks').clone() if inputs.get('speech_masks') is not None else None,
+                }
+                
+                if len(voice_cache) >= VOICE_CACHE_MAX_SIZE:
+                    oldest_key = next(iter(voice_cache))
+                    del voice_cache[oldest_key]
+                    logging.info(f"Voice cache full, removed oldest entry: '{oldest_key}'")
+                
+                voice_cache[voice_label] = {
+                    'voice_inputs': cached_voice_data,
+                    'mtime': file_mtime,
+                    'path': voice_audio_path,
+                }
     else:
         # No voice cloning - generate without voice samples
         inputs = processor(
@@ -362,6 +449,7 @@ async def change_voice(reference_speaker: str = Form(...), file: UploadFile = Fi
         save_path = generate_speech(
             text=text,
             voice_audio_path=processed_ref,
+            voice_label=reference_speaker,
             speed=1.0,
         )
 
@@ -453,6 +541,7 @@ async def synthesize_speech(
         save_path = generate_speech(
             text=text,
             voice_audio_path=processed_ref,
+            voice_label=voice,
             speed=speed,
         )
 
